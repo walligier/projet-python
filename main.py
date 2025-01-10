@@ -3,140 +3,84 @@ import requests
 import re
 import pandas as pd
 from email.mime.text import MIMEText
-import smtplib
-from datetime import datetime, timedelta, timezone
+import matplotlib.pyplot as plt
 
-
-## ETAPE 1 - Extraction des flux RSS
-url_avis = "https://www.cert.ssi.gouv.fr/avis/feed"
-url_alerte = "https://www.cert.ssi.gouv.fr/alerte/feed"
-
-# Fonction pour traiter les flux RSS
-def process_rss_feed(url):
-    response = requests.get(url)
-    if response.status_code == 200:
-        rss_feed = feedparser.parse(response.content)
-        entries = []
-        for entry in rss_feed.entries:
-            print("Titre :", entry.title)
-            print("Description:", entry.description)
-            print("Lien :", entry.link)
-            print("Date :", entry.published)
-            print("----------------------------------------------------------")
-            entries.append({
-                'title': entry.title,
-                'link': entry.link,
-                'date': entry.published,
-                'type': 'Alerte' if 'alerte' in url else 'Avis'
-            })
-        return entries
-    else:
-        print("Erreur lors du téléchargement du flux RSS.")
-        return []
-
-# Filtrer les entrées en fonction de la date de publication
-def filter_by_date(entries, days=30):
-    threshold_date = datetime.now(timezone.utc) - timedelta(days=days)  # Utilisation de timezone.utc
-    filtered_entries = [
-        entry for entry in entries
-        if datetime.strptime(entry['date'], "%a, %d %b %Y %H:%M:%S %z") > threshold_date
-    ]
-    return filtered_entries
-
-avis_entries = process_rss_feed(url_avis)
-alerte_entries = process_rss_feed(url_alerte)
-all_entries = avis_entries + alerte_entries
-all_entries = filter_by_date(all_entries, days=30)  # Filtrer pour les 30 derniers jours
-
-# Fonction pour extraire les CVE depuis une URL
+##ETAPE 1
+url1 = "https://www.cert.ssi.gouv.fr/avis/feed"
+url2 = "https://www.cert.ssi.gouv.fr/alerte/feed"
+rss_feed1 = feedparser.parse(url1)
+rss_feed2 = feedparser.parse(url2)
+for entry in rss_feed1.entries:
+    print('Titre:', entry.title)
+    print('Description:', entry.description)
+    print('Lien:', entry.link)
+    print('Date:', entry.published)
+for entry in rss_feed2.entries:
+    print('Titre:', entry.title)
+    print('Description:', entry.description)
+    print('Lien:', entry.link)
+    print('Date:', entry.published)
+# %%
+##ETAPE 2
+url = "https://www.cert.ssi.gouv.fr/alerte/CERTFR-2024-ALE-001/json/"
+response = requests.get(url)
+data = response.json()
+ref_cves = list(data["cves"])  # Extraction des CVE reference dans la clé cves du dict data
+# attention il s’agit d’une liste des dictionnaires avec name et url comme clés
+print("CVE référencés ", ref_cves)
+# Extraction des CVE avec une regex
 cve_pattern = r"CVE-\d{4}-\d{4,7}"
-def extract_cves(url, max_cves=5):
-    response = requests.get(url + "/json/")
-    if response.status_code == 200:
-        data = response.json()
-        # Extraction des CVE
-        ref_cves = [cve["name"] for cve in data.get("cves", [])]
-        cve_list = list(set(re.findall(cve_pattern, str(data))))
-        return ref_cves[:max_cves] + cve_list[:max_cves]
-    return []
+cve_list = list(set(re.findall(cve_pattern, str(data))))
+print("CVE trouvés :", cve_list)
 
-## ETAPE 2 - Extraction des CVE depuis toutes les alertes
-for entry in all_entries:
-    entry['cves'] = extract_cves(entry['link'])
+# %%
+##ETAPE 3
+cve_id = "CVE-2023-24488"
+url = f"https://cveawg.mitre.org/api/cve/{cve_id}"
+response = requests.get(url)
+data = response.json()
+# Extraire la description
+description = data["containers"]["cna"]["descriptions"][0]["value"]  # Extraire le score CVSS
+# ATTENTION tous les CVE ne contiennent pas nécessairement ce champ, gérez l’exception,
+# ou peut etre au lieu de cvssV3_0 c’est cvssV3_1 ou autre clé
+cvss_score = data["containers"]["cna"]["metrics"][0]["cvssV3_1"]["baseScore"]
+cwe = "Non disponible"
+cwe_desc = "Non disponible"
+problemtype = data["containers"]["cna"].get("problemTypes", {})
+if problemtype and "descriptions" in problemtype[0]:
+    cwe = problemtype[0]["descriptions"][0].get("cweId", "Non disponible")
+    cwe_desc = problemtype[0]["descriptions"][0].get("description", "Non disponible")
+# Extraire les produits affectés
+affected = data["containers"]["cna"]["affected"]
+for product in affected:
+    vendor = product["vendor"]
+    product_name = product["product"]
+    versions = [v["version"] for v in product["versions"] if v["status"] == "affected"]
+    print(f"Éditeur : {vendor}, Produit : {product_name}, Versions : {', '.join(versions)}")
+# Afficher les résultats
+print(f"CVE : {cve_id}")
+print(f"Description : {description}")
+print(f"Score CVSS : {cvss_score}")
+print(f"Type CWE : {cwe}")
+print(f"CWE Description : {cwe_desc}")
 
-## ETAPE 3 - Enrichissement des CVE
-def enrich_cve(cve_id):
-    url = f"https://cveawg.mitre.org/api/cve/{cve_id}"
-    response = requests.get(url)
-    if response.status_code == 200:
-        data = response.json()
-        # Extraire la description
-        try:
-            description = data["containers"]["cna"]["descriptions"][0]["value"]
-        except KeyError:
-            description = "Non disponible"
+cve_id = "CVE-2023-46805"
+url = f"https://api.first.org/data/v1/epss?cve={cve_id}"
+response = requests.get(url)
+data = response.json()
+# Extraire le score EPSS
+epss_data = data.get("data", [])
+if epss_data:
+    epss_score = epss_data[0]["epss"]
+    print(f"CVE : {cve_id}")
+    print(f"Score EPSS : {epss_score}")
+else:
+    print(f"Aucun score EPSS trouvé pour {cve_id}")
 
-        # Extraire le score CVSS
-        try:
-            cvss_score = data["containers"]["cna"]["metrics"][0]["cvssV3_1"]["baseScore"]
-            severity = data["containers"]["cna"]["metrics"][0]["cvssV3_1"]["baseSeverity"]
-        except KeyError:
-            cvss_score = "Non disponible"
-            severity = "Non disponible"
-
-        # Extraire les informations CWE
-        cwe = "Non disponible"
-        cwe_desc = "Non disponible"
-        problemtype = data["containers"]["cna"].get("problemTypes", {})
-        if problemtype and "descriptions" in problemtype[0]:
-            cwe = problemtype[0]["descriptions"][0].get("cweId", "Non disponible")
-            cwe_desc = problemtype[0]["descriptions"][0].get("description", "Non disponible")
-
-        # Extraire les produits affectés
-        affected_info = []
-        try:
-            affected = data["containers"]["cna"]["affected"]
-            for product in affected:
-                vendor = product["vendor"]
-                product_name = product["product"]
-                versions = [v["version"] for v in product["versions"] if v["status"] == "affected"]
-                affected_info.append({
-                    'vendor': vendor,
-                    'product': product_name,
-                    'versions': ', '.join(versions)
-                })
-        except KeyError:
-            affected_info = [{
-                'vendor': 'Non disponible',
-                'product': 'Non disponible',
-                'versions': 'Non disponible'
-            }]
-
-        # Extraire le score EPSS
-        epss_score = "Non disponible"
-        epss_url = f"https://api.first.org/data/v1/epss?cve={cve_id}"
-        epss_response = requests.get(epss_url)
-        if epss_response.status_code == 200:
-            epss_data = epss_response.json().get("data", [])
-            if epss_data:
-                epss_score = epss_data[0].get("epss", "Non disponible")
-
-        enriched_data = {
-            'cve_id': cve_id,
-            'description': description,
-            'cvss_score': cvss_score,
-            'severity': severity,
-            'cwe': cwe,
-            'cwe_desc': cwe_desc,
-            'epss_score': epss_score,
-            'affected': affected_info
-        }
-
-        print(enriched_data)
-        return enriched_data
-    return {}
-
-# Enrichissement pour chaque CVE et compilation des résultats
+# %%
+##ETAPE4
+rssfeed = rss_feed1 + rss_feed2
+all_entries = rssfeed.entries
 data_rows = []
 for entry in all_entries:
     for cve in entry['cves']:
@@ -160,11 +104,18 @@ df = pd.DataFrame(data_rows, columns=[
 
 print(df)
 
-# Exporter vers un fichier CSV
-df.to_csv('resultats_cve.csv', index=False, encoding='utf-8')
-print("Le fichier CSV a été exporté avec succès : resultats_cve.csv")
 
-## ETAPE 5 et 6 - Envoi d'email
+# %%
+##ETAPE 5
+# Histogramme des scores CVSS
+
+# Classement des produits ou éditeurs les plus affectés
+
+# Nuage de points entre Score CVSS et Score EPSS
+
+
+# %%
+##ETAPE 6
 def send_email(to_email, subject, body):
     from_email = "VOTRE MAIL"
     password = "VOTRE CLE D'ACCES DU MAIL"
@@ -179,5 +130,3 @@ def send_email(to_email, subject, body):
     server.login(from_email, password)
     server.sendmail(from_email, to_email, msg.as_string())
     server.quit()
-
-print("Traitement terminé")
